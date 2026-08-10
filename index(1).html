@@ -842,7 +842,11 @@ advTransition:"transition",advCounter:"counter",advAttack:"attack",advChance:"ch
 advDefensiveRisk:"defensiveRisk",advSetPiece:"setPiece"
 };
 function renderAdvancedTactics(){
- $("advancedClub").textContent=`${state.club} · ${state.formation}`;
+ // Mobil ve ilk açılış güvenliği: eski kayıtlar eksik alanlar içerebilir.
+ if(!state.tacticAdvanced) state.tacticAdvanced={...tacticDefaults};
+ else state.tacticAdvanced={...tacticDefaults,...state.tacticAdvanced};
+ if(!Array.isArray(state.squad)) state.squad=[];
+ $("advancedClub").textContent=`${state.club||"Takım"} · ${state.formation||"4-3-3"}`;
  for(const [id,vals] of Object.entries(advOptions)){
    const el=$(id);if(!el)continue;el.innerHTML="";
    vals.forEach(v=>{
@@ -1023,6 +1027,17 @@ function opponentAdvice(){
   if(s>=82)return `${o.opp} güçlü rakip. Dengeli mentalite + kontrollü geçiş öneriliyor.`;
   if(s>=72)return `${o.opp} orta-üst seviye. Kanatları kullanıp orta-yüksek pres deneyebilirsin.`;
   return `${o.opp} daha düşük güçte. Hücum mentalitesi ve daha yüksek tempo işe yarayabilir.`;
+}
+function showAdvancedTacticsSafe(){
+  const screen=$("advancedTactics");
+  if(!screen)return;
+  ["squadScreen","tacticsScreen","matchScreen","resultsScreen","standingsScreen","seasonEndScreen"].forEach(id=>{const el=$(id);if(el)el.classList.add("hidden")});
+  screen.classList.remove("hidden");
+  // İlk SPA geçişinde DOM görünür olduktan sonra render et.
+  requestAnimationFrame(()=>{
+    try{renderAdvancedTacticsV9();}catch(e){console.error("Advanced tactics render:",e);}
+    setTimeout(()=>{try{renderAdvancedTacticsV9();}catch(e){console.error("Advanced tactics retry:",e);}},40);
+  });
 }
 function renderAdvancedTacticsV9(){
   renderAdvancedTactics();
@@ -1918,6 +1933,15 @@ renderLeadersV17();
 </div>
 
 <script>
+function bootAdvancedTactics(){
+  try{
+    const screen=$("advancedTactics");
+    if(screen && !screen.classList.contains("hidden")) showAdvancedTacticsSafe();
+  }catch(e){console.error("Fantasy Manager advanced boot:",e)}
+}
+window.addEventListener("load",bootAdvancedTactics);
+window.addEventListener("pageshow",bootAdvancedTactics);
+
 document.addEventListener("DOMContentLoaded",()=>{
   try{
     if(typeof renderLeadersV17==="function")renderLeadersV17();
