@@ -499,9 +499,12 @@ DB.forEach(p=>{if(![...$("clubFilter").options].some(o=>o.value===p.club)){const
 
 function selectClub(c){
   state={club:c,budget:250,squad:[],formation:"4-3-3"};
+  seasonState.aiSquads={};
+  ensureAISquads(true);
   $("teamScreen").classList.add("hidden");$("squadScreen").classList.remove("hidden");
   $("chosenClub").textContent=`Seçilen kulüp: ${c}`;
   renderAll(); save();
+  localStorage.setItem("fantasySeasonV8",JSON.stringify(seasonState));
 }
 function count(pos){return state.squad.filter(x=>x.pos===pos).length}
 function canAdd(p){return count(p.pos)<limits[p.pos] && !state.squad.some(x=>x.id===p.id) && state.budget>=p.price}
@@ -754,16 +757,56 @@ const seasonFixtures=buildSeasonFixtures();
 seasonFixtures[1]=officialWeek2V9;
 
 let seasonState={
-  week:1,
-  table:{},
-  results:{},
-  initialized:false,
-  lastCompletedWeek:0,
-  lastCompletedResults:[]
+  week:1, table:{}, results:{}, initialized:false,
+  lastCompletedWeek:0, lastCompletedResults:[], aiSquads:{}
 };
+
+/* AI TRANSFER MOTORU: Diğer takımlar ortak oyuncu havuzundan kadro kurar. */
+function normalizePlayerRating(p){
+  return Math.max(55,Math.min(93,Math.round(58 + Math.sqrt(Math.max(.1,p.price))*3.5 + ((p.id*7)%8))));
+}
+function aiPlayerPool(){ return DB.map(p=>({...p,rating:normalizePlayerRating(p)})); }
+function weightedPick(pool,target){
+  if(!pool.length)return null;
+  const ranked=[...pool].sort((a,b)=>Math.abs(a.rating-target)-Math.abs(b.rating-target));
+  const sample=ranked.slice(0,Math.min(14,ranked.length));
+  const weights=sample.map((p,i)=>Math.max(1,18-i*1.15));
+  let r=Math.random()*weights.reduce((a,b)=>a+b,0);
+  for(let i=0;i<sample.length;i++){r-=weights[i];if(r<=0)return sample[i];}
+  return sample[sample.length-1];
+}
+function buildAISquad(club){
+  const strength=teamStrength[club]||65, pool=aiPlayerPool(), roster=[];
+  const quotas={GK:2,DEF:5,MID:5,FWD:3};
+  Object.entries(quotas).forEach(([pos,count])=>{
+    const posPool=pool.filter(p=>p.pos===pos);
+    for(let i=0;i<count && posPool.length;i++){
+      const target=Math.max(56,Math.min(91,strength+(Math.random()*6-3)));
+      const pick=weightedPick(posPool,target); if(!pick)break;
+      roster.push({...pick,club,aiTransfer:true,id:`AI-${club}-${pos}-${i}-${pick.id}`});
+      const idx=posPool.findIndex(x=>x.id===pick.id); if(idx>=0)posPool.splice(idx,1);
+    }
+  });
+  return roster;
+}
+function ensureAISquads(force=false){
+  if(!seasonState.aiSquads)seasonState.aiSquads={};
+  seasonTeams.forEach(club=>{
+    if(club===state.club)return;
+    if(force || !Array.isArray(seasonState.aiSquads[club]) || seasonState.aiSquads[club].length<15)
+      seasonState.aiSquads[club]=buildAISquad(club);
+  });
+}
+function aiRosterStrength(club){
+  const base=teamStrength[club]||65, roster=seasonState.aiSquads?.[club]||[];
+  if(!roster.length)return base;
+  const avg=roster.reduce((s,p)=>s+p.rating,0)/roster.length;
+  return Math.max(base-4,Math.min(base+4,base+(avg-base)*.22));
+}
 function initSeason(){
-  seasonTeams.forEach(t=>{if(!seasonState.table[t]) seasonState.table[t]={team:t,p:0,o:0,w:0,d:0,l:0,gf:0,ga:0,gd:0};});
+  seasonTeams.forEach(t=>{if(!seasonState.table[t])seasonState.table[t]={team:t,p:0,o:0,w:0,d:0,l:0,gf:0,ga:0,gd:0};});
   if(!seasonState.initialized){seasonState.week=1;seasonState.results={};seasonState.initialized=true;}
+  ensureAISquads();
 }
 initSeason();
 
@@ -850,7 +893,7 @@ function poissonLike(mean){
  return Math.max(0,n-1);
 }
 function simulateMatch(home,away){
- const hs=teamStrength[home]||65, as=teamStrength[away]||65;
+ const hs=aiRosterStrength(home), as=aiRosterStrength(away);
  let ha=home===state.club?userTeamStrength():hs;
  let aa=away===state.club?userTeamStrength():as;
  if(home===state.club){ha+=tacticAttackBonus()+tacticDefenseBonus()*.25}
@@ -911,7 +954,7 @@ function saveSeason(){
 }
 try{
  const oldSeason=JSON.parse(localStorage.getItem("fantasySeasonV8"));
- if(oldSeason){seasonState=oldSeason;initSeason()}
+ if(oldSeason){seasonState=oldSeason;initSeason();ensureAISquads()}
 }catch(e){}
 $("advancedSave").onclick=()=>{saveSeason();playCurrentWeek()};
 $("advancedBack").onclick=()=>{$("advancedTactics").classList.add("hidden");$("squadScreen").classList.remove("hidden");renderAll()};
@@ -1112,13 +1155,10 @@ function buildGenericRoster(club){
   return leaguePlayerDatabaseV9[club];
 }
 function getClubRoster(club){
-  // The current user's selected squad is always exact.
   if(club===state.club && state.squad && state.squad.length)return state.squad;
-  // If the original player database contains the club, use it.
-  if(typeof players!=="undefined"){
-    const exact=players.filter(p=>p.club===club);
-    if(exact.length>=5)return exact;
-  }
+  ensureAISquads();
+  if(Array.isArray(seasonState.aiSquads?.[club]) && seasonState.aiSquads[club].length)
+    return seasonState.aiSquads[club];
   return buildGenericRoster(club);
 }
 function renderLeagueSquads(selected=state.club){
@@ -1126,7 +1166,9 @@ function renderLeagueSquads(selected=state.club){
   $("clubList").querySelectorAll("button").forEach(b=>b.onclick=()=>renderLeagueSquads(b.dataset.club));
   const roster=getClubRoster(selected);
   $("otherSquadTitle").textContent=selected;
-  $("otherSquadMeta").textContent=`Takım gücü ${teamStrength[selected]||65} · ${roster.length} oyuncu`;
+  const ai=selected!==state.club;
+  const shownStrength=Math.round(aiRosterStrength(selected));
+  $("otherSquadMeta").textContent=`Takım gücü ${shownStrength} · ${roster.length} oyuncu${ai?" · AI transfer kadrosu":""}`;
   $("otherSquadGrid").innerHTML=roster.map(p=>`<div class="other-player"><b>${p.name}</b><span class="player-pos">${p.pos}</span><br><small>Genel: ${p.rating} · Değer: ${p.price}M</small></div>`).join("");
 }
 $("openLeagueSquads").onclick=()=>{
