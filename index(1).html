@@ -575,7 +575,7 @@ $("backBtn").onclick=()=>{$("dashboardScreen").classList.add("hidden");$("squadS
 // Güvenli şekilde mevcut kayıt varsa geri yükleme.
 try{
  const raw=localStorage.getItem("fantasyManagerSaveV2");
- if(raw){const x=JSON.parse(raw);if(x&&x.club&&Array.isArray(x.squad)){state=x;$("teamScreen").classList.add("hidden");$("squadScreen").classList.remove("hidden");$("chosenClub").textContent=`Seçilen kulüp: ${state.club}`;renderAll()}}
+ if(raw){const x=JSON.parse(raw);if(x&&x.club&&Array.isArray(x.squad)){state=x;if(state.squad.length===0 && (state.budget===200 || state.budget===250)) state.budget=250;$("teamScreen").classList.add("hidden");$("squadScreen").classList.remove("hidden");$("chosenClub").textContent=`Seçilen kulüp: ${state.club}`;renderAll()}}
 }catch(e){}
 
 
@@ -1152,25 +1152,28 @@ function finishLiveMatch(){
   saveSeason();
   renderPostMatchXV16();
   liveMatchContext=null;
-/* Rakip kadroları: verilen gerçek veri paketleri korunur; diğer kulüpler için oyun içi roster */
-const genericFirst=["Mert","Emir","Berke","Ahmet","Yusuf","Arda","Eren","Kaan","Can","Oğuz","Kerem","Berkay","Doğan","Umut","Mehmet"];
-const genericLast=["Yılmaz","Demir","Kaya","Aydın","Çelik","Şahin","Öztürk","Kılıç","Koç","Arslan","Güneş","Aksoy","Polat","Ergin","Bulut"];
-const posTemplate=["GK","GK","DEF","DEF","DEF","DEF","DEF","MID","MID","MID","MID","FWD","FWD","FWD","FWD"];
+/* Rakip kadroları: yalnızca gerçek oyuncu veritabanındaki isimler kullanılır.
+   Eski sürümde burada otomatik "Mert Yılmaz" vb. sahte isimler üretiliyordu. */
 const leaguePlayerDatabaseV9={};
 function buildGenericRoster(club){
-  if(leaguePlayerDatabaseV9[club])return leaguePlayerDatabaseV9[club];
+  if(leaguePlayerDatabaseV9[club]) return leaguePlayerDatabaseV9[club];
   const base=teamStrength[club]||65;
-  leaguePlayerDatabaseV9[club]=posTemplate.map((pos,i)=>({
-    id:`${club}-${i}`,
-    name:`${genericFirst[(i+club.length)%genericFirst.length]} ${genericLast[(i*2+club.length)%genericLast.length]}`,
-    club,pos,
-    rating:Math.max(58,Math.min(84,Math.round(base-7+Math.random()*14))),
-    price:Math.max(.4,Math.round((base/10+Math.random()*4)*10)/10)
-  }));
-  return leaguePlayerDatabaseV9[club];
+  const usedIds=new Set();
+  const roster=[];
+  const quotas={GK:2,DEF:5,MID:5,FWD:3};
+  Object.entries(quotas).forEach(([pos,count])=>{
+    const candidates=DB.filter(p=>p.pos===pos && !usedIds.has(p.id))
+      .sort((a,b)=>Math.abs(a.rating-base)-Math.abs(b.rating-base));
+    candidates.slice(0,count).forEach(p=>{
+      usedIds.add(p.id);
+      roster.push({...p,club,aiTransfer:true,id:`VIEW-${club}-${p.id}`});
+    });
+  });
+  leaguePlayerDatabaseV9[club]=roster;
+  return roster;
 }
 function getClubRoster(club){
-  if(club===state.club && state.squad && state.squad.length)return state.squad;
+  if(club===state.club && state.squad && state.squad.length) return state.squad;
   ensureAISquads();
   if(Array.isArray(seasonState.aiSquads?.[club]) && seasonState.aiSquads[club].length)
     return seasonState.aiSquads[club];
